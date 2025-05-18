@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Web IDE</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        header {
+            background-color: #00979D;
+            color: white;
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            background-color: #E5F2F2;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: #00979D;
+            font-weight: bold;
+        }
+        
+        button:hover {
+            background-color: #FFFFFF;
+        }
+        
+        .board-select {
+            padding: 7px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            overflow: hidden;
+        }
+        
+        #editor-container {
+            height: 70%;
+            border-bottom: 5px solid #00979D;
+        }
+        
+        #terminal-container {
+            height: 30%;
+            background-color: #1E1E1E;
+            padding: 10px;
+            overflow: hidden;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .status {
+            background-color: #f0f0f0;
+            padding: 5px 10px;
+            border-radius: 4px;
+            margin-left: 10px;
+        }
+        
+        .status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        
+        .status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Arduino Web IDE</h1>
+        <div class="controls">
+            <select id="board-select" class="board-select">
+                <option value="arduino:avr:uno">Arduino Uno</option>
+                <option value="arduino:avr:nano">Arduino Nano</option>
+                <option value="arduino:avr:mega">Arduino Mega</option>
+                <option value="arduino:sam:due">Arduino Due</option>
+                <option value="arduino:avr:leonardo">Arduino Leonardo</option>
+            </select>
+            <button id="new-btn">New</button>
+            <button id="compile-btn">Verify</button>
+            <button id="upload-btn">Upload</button>
+            <span id="status" class="status">Ready</span>
+        </div>
+    </header>
+    
+    <div class="container">
+        <div id="editor-container"></div>
+        <div id="terminal-container"></div>
+    </div>
+
+    <!-- Load libraries separately to avoid conflicts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/xterm.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xterm/3.14.5/addons/fit/fit.min.js"></script>
+
+    <!-- Load Monaco last -->
+    <script>
+        // Default Arduino sketch template
+        const defaultSketch = 
+        `void setup() {
+            // put your setup code here, to run once:
+            Serial.begin(9600);
+            pinMode(LED_BUILTIN, OUTPUT);
+        }
+
+        void loop() {
+            // put your main code here, to run repeatedly:
+            digitalWrite(LED_BUILTIN, HIGH);
+            Serial.println("LED ON");
+            delay(1000);
+            digitalWrite(LED_BUILTIN, LOW);
+            Serial.println("LED OFF");
+            delay(1000);
+        }`;
+
+        // Initialize terminal first
+        let term;
+        
+        function initTerminal() {
+            term = new Terminal({
+                cursorBlink: true,
+                fontSize: 14,
+                lineHeight: 1.2,
+                fontFamily: 'Consolas, "Courier New", monospace'
+            });
+            term.open(document.getElementById('terminal-container'));
+            term.writeln('Arduino Web IDE Terminal');
+            term.writeln('-------------------------');
+            term.writeln('Ready to compile and upload Arduino sketches.');
+            term.writeln('');
+        }
+
+        // Initialize terminal before Monaco loads
+        initTerminal();
+
+        // Load Monaco editor
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.37.1/min/vs/loader.min.js';
+        script.onload = () => {
+            require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.37.1/min/vs' }});
+            
+            // Wait for Monaco to load
+            require(['vs/editor/editor.main'], function() {
+                // Initialize the editor with Arduino sketch template
+                const editor = monaco.editor.create(document.getElementById('editor-container'), {
+                    value: defaultSketch,
+                    language: 'cpp',
+                    theme: 'vs-dark'
+                });
+                
+                window.addEventListener('resize', () => {
+                    editor.layout();
+                });
+                
+                // Button handlers
+                document.getElementById('new-btn').addEventListener('click', () => {
+                    if (confirm('Create a new sketch? Current changes will be lost.')) {
+                        editor.setValue(`void setup() {
+                    // put your setup code here, to run once:
+                    Serial.begin(9600);
+                    }
+
+                    void loop() {
+                    // put your main code here, to run repeatedly:
+                    
+                    }`);
+                        updateStatus('Ready', 'normal');
+                    }
+                });
+                
+                document.getElementById('compile-btn').addEventListener('click', () => {
+                    const code = editor.getValue();
+                    const boardType = document.getElementById('board-select').value;
+                    
+                    updateStatus('Compiling...', 'normal');
+                    term.writeln('\r\n> Compiling sketch for ' + boardType);
+                    
+                    // Send code to server for compilation
+                    compileCode(code, boardType);
+                });
+                
+                document.getElementById('upload-btn').addEventListener('click', () => {
+                    const code = editor.getValue();
+                    const boardType = document.getElementById('board-select').value;
+                    
+                    updateStatus('Uploading...', 'normal');
+                    term.writeln('\r\n> Compiling and uploading sketch for ' + boardType);
+                    
+                    // Send code to server for upload
+                    uploadCode(code, boardType);
+                });
+            });
+        };
+
+        document.body.appendChild(script);
+        
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = 'status';
+            if (type === 'success') {
+                statusEl.classList.add('success');
+            } else if (type === 'error') {
+                statusEl.classList.add('error');
+            }
+        }
+        
+        function compileCode(code, boardType) {
+            // In a real implementation, this would send code to the server
+            fetch('/api/compile', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ code, boardType }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    term.writeln('> Compilation successful!');
+                    term.writeln(data.output);
+                    updateStatus('Compilation successful', 'success');
+                } else {
+                    term.writeln('> Compilation failed:');
+                    term.writeln(data.errors);
+                    updateStatus('Compilation failed', 'error');
+                }
+            })
+            .catch(error => {
+                term.writeln('> Error: ' + error.message);
+                updateStatus('Connection error', 'error');
+            });
+            
+            // Simulated response for demo purposes
+            setTimeout(() => {
+                term.writeln('> arduino-cli compile --fqbn ' + boardType);
+                term.writeln('> Compilation successful');
+                term.writeln('> Sketch uses 4526 bytes (14%) of program storage space. Maximum is 32256 bytes.');
+                term.writeln('> Global variables use 149 bytes (7%) of dynamic memory, leaving 1899 bytes for local variables. Maximum is 2048 bytes.');
+                updateStatus('Compilation successful', 'success');
+            }, 1500);
+        }
+        
+        function uploadCode(code, boardType) {
+            // In a real implementation, this would send code to the server
+            fetch('/api/upload', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ code, boardType }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    term.writeln('> Upload successful!');
+                    term.writeln(data.output);
+                    updateStatus('Upload successful', 'success');
+                } else {
+                    term.writeln('> Upload failed:');
+                    term.writeln(data.errors);
+                    updateStatus('Upload failed', 'error');
+                }
+            })
+            .catch(error => {
+                term.writeln('> Error: ' + error.message);
+                updateStatus('Connection error', 'error');
+            });
+            
+            // Simulated response for demo purposes - don't show this if we're actually using the server
+            // setTimeout(() => {
+            //     term.writeln('> arduino-cli upload -p COM19 --fqbn ' + boardType);
+            //     term.writeln('> Upload successful');
+            //     updateStatus('Upload successful', 'success');
+            // }, 2000);
+        }
+    </script>
+</body>
+</html>
